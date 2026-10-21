@@ -28,6 +28,11 @@ runtime you build contains the game, so it is for your own use only; do not shar
 For `dora` that is the 3D world: terrain, shadows, transparency and post-processing have not been
 looked at yet.
 
+| | | |
+|---|---|---|
+| ![Title screen](docs/screenshots/title.png) | ![Terms of use](docs/screenshots/terms.png) | ![Opening](docs/screenshots/opening.png) |
+| title screen | terms of use | opening, under the stars |
+
 ## How it works
 
 ```
