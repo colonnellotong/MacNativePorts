@@ -109,11 +109,19 @@ patches/                   changes this project makes to upstream d2r_gfx, as ap
 docs/                      porting guide, screenshots
 ```
 
-## Credits
+## Acknowledgements and lineage
 
-The rewrite tooling, the Horizon host and the NVN-on-Metal layer come from
-[MacNativeGames](https://github.com/ly05010419/MacNativeGames) by ly05010419 and contributors, via
-its `by3-port` branch. `shared/gfx` is a fork of `d2r_gfx` from that project.
+MacNativePorts would not exist without
+[MacNativeGames](https://github.com/ly05010419/MacNativeGames). This project began by studying and
+following the path it opened: running rewritten Switch ARM64 code natively on Apple silicon,
+hosting Horizon services on macOS, and translating NVN graphics to Metal. Its implementation and
+the hard-won experience documented by ly05010419 and the other contributors provided the practical
+foundation for bringing another game to this approach. We are grateful to everyone who made that
+work available.
+
+The rewrite tooling, the Horizon host and the NVN-on-Metal layer used here come from
+MacNativeGames' `by3-port` branch. `shared/gfx` is a fork of `d2r_gfx` from that project. MacNativePorts
+is an independent project and is not an official continuation of MacNativeGames.
 
 `d2r_gfx` builds on [deko3d](https://github.com/devkitPro/deko3d) for its NVN surface; shaders are
 translated with [SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross). See
