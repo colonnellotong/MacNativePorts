@@ -1,0 +1,28 @@
+# The game, the keys and everything derived from them stay out of the repository.
+# Nothing here is needed to build the runtime; it is all made on your own machine
+# from your own copy of the game.
+dora_build/
+prodkeys_src/
+refs/
+MacNativeGames/
+
+# Session notes and scratch, not part of the port.
+.workbuddy/
+
+# Build output and local state.
+build/
+obj/
+*.o
+*.dSYM/
+user-data/
+logs/
+shots/
+shader-cache/
+__pycache__/
+*.pyc
+
+# macOS.
+.DS_Store
+
+# Porting notes: working records, not part of the published project.
+docs/notes/

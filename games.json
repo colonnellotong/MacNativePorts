@@ -1,0 +1,39 @@
+{
+  "schema": 1,
+  "note": "One entry per game. 'code' is the directory name under games/ and the value passed to make GAME=...",
+  "games": [
+    {
+      "code": "dora",
+      "title": "Doraemon Story of Seasons: Friends of the Great Kingdom",
+      "title_zh": "哆啦A梦 牧场物语 自然王国与和乐家人",
+      "title_ids": {
+        "base": "0100F5E0177AC000",
+        "update": "0100F5E0177AC800"
+      },
+      "engine": "Unity IL2CPP",
+      "audio": "CRIWARE ADX2, decoded in the guest",
+      "video": "CRIWARE Sofdec2, not wired up",
+      "state": "playable up to the opening",
+      "verified": {
+        "on": "2026-10-21",
+        "hardware": "Apple silicon, macOS",
+        "reached": [
+          "title screen",
+          "terms of use and privacy policy",
+          "save file written to the notice board",
+          "opening dialogue under the stars",
+          "Nobita runs out of the house"
+        ],
+        "not_yet": [
+          "the 3D world (ranch, town) — terrain, shadows, transparency, post-processing",
+          "Sofdec2 movie playback"
+        ]
+      },
+      "overlay": {
+        "own_files": 20,
+        "replaces_shared": 12,
+        "note": "the remaining 26 source files come from shared/runtime unchanged"
+      }
+    }
+  ]
+}

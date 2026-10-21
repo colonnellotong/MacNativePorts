@@ -1,0 +1,297 @@
+{
+  "title": "Doraemon Story of Seasons: Friends of the Great Kingdom",
+  "title_ids": {
+    "base": "0100F5E0177AC000",
+    "update": "0100F5E0177AC800"
+  },
+  "version": {
+    "value": 0,
+    "display": "base, update 1.3.0 not merged"
+  },
+  "engine": {
+    "runtime": "Unity IL2CPP",
+    "il2cpp_metadata": "Data/Managed/Metadata/global-metadata.dat",
+    "il2cpp_metadata_size": 10192328,
+    "audio": "CRIWARE ADX2 (141 .acb, 130 .awb)",
+    "video": "CRIWARE Sofdec2 (1 .usm)",
+    "asset_delivery": "Addressables (12,739 .bundle)"
+  },
+  "container": {
+    "kind": "xci",
+    "source_size": 2390039552,
+    "note": "base Program NCA stored as Block-compressed .ncz; nsz -D expands it"
+  },
+  "program_nca": {
+    "name": "91aeaec05c817283a9aa047e172556bc.nca",
+    "nca_offset": 126976,
+    "size": 2389344256,
+    "content_type": 0,
+    "title_id": "0100F5E0177AC000"
+  },
+  "exefs_sha256": {
+    "main": "2c0d84357f66976365368d54dcd3dac26661dca5ff0f0a8aebb272ad61c8a0a9",
+    "main.npdm": "a7b6a6e96ff3dd634f7bbfcb9fd257c3e728cc3dfd4e3cc03547882425578f6b",
+    "rtld": "8e08c8cf2e4d6b39d69643af10ce765d39c06860878224c68f8cafc45a2636aa",
+    "sdk": "d30e3b441f4cfce2722eac09474354cad82d56741c86240fe4ae0cc4b7fd7df2",
+    "subsdk0": "366a266d8be18489795831224d6837884ac8ab1edf5c120754960bbfe9ac6664"
+  },
+  "integrity": "FS header, ExeFS hash table, and every ExeFS data block verified; RSA signatures not checked",
+  "modules": {
+    "main": {
+      "nso_sha256": "2c0d84357f66976365368d54dcd3dac26661dca5ff0f0a8aebb272ad61c8a0a9",
+      "build_id": "53cc82c1c5cae8d42ea7eeae165e575200000000000000000000000000000000",
+      "image_size": 127930368,
+      "segments": [
+        {
+          "index": 0,
+          "file_offset": 257,
+          "memory_offset": 0,
+          "size": 64902656,
+          "compressed": true,
+          "stored": 30547324,
+          "perms": "r-x"
+        },
+        {
+          "index": 1,
+          "file_offset": 30547581,
+          "memory_offset": 64905216,
+          "size": 30979188,
+          "compressed": true,
+          "stored": 13394785,
+          "perms": "rw-"
+        },
+        {
+          "index": 2,
+          "file_offset": 43942366,
+          "memory_offset": 95887360,
+          "size": 11492304,
+          "compressed": true,
+          "stored": 489786,
+          "perms": "rw-"
+        },
+        {
+          "index": 3,
+          "kind": "bss",
+          "memory_offset": 107379664,
+          "size": 20550704
+        }
+      ],
+      "rewrite_sites": 21431,
+      "rewrite_kinds": {
+        "x18": 21423,
+        "W": 6,
+        "C": 2,
+        "J": 8
+      },
+      "gates": {},
+      "patched_sha256": "a977fa45294c0fe80a0614a1afd3daaec3f0533815a194099759a5d3e4e6e330",
+      "patched_size": 128876012,
+      "relocations": 477297,
+      "init_array_entries": 334,
+      "exports": 64,
+      "equivalence": {
+        "sites": 21431,
+        "trials": 66325,
+        "effective": 57307,
+        "divergences": 0
+      }
+    },
+    "sdk": {
+      "nso_sha256": "d30e3b441f4cfce2722eac09474354cad82d56741c86240fe4ae0cc4b7fd7df2",
+      "build_id": "3644a6760469451cabc99f00c540acc2a64aee41000000000000000000000000",
+      "image_size": 14315520,
+      "segments": [
+        {
+          "index": 0,
+          "file_offset": 257,
+          "memory_offset": 0,
+          "size": 6115312,
+          "compressed": true,
+          "stored": 3500074,
+          "perms": "r-x"
+        },
+        {
+          "index": 1,
+          "file_offset": 3500331,
+          "memory_offset": 6115328,
+          "size": 7003176,
+          "compressed": true,
+          "stored": 2469611,
+          "perms": "rw-"
+        },
+        {
+          "index": 2,
+          "file_offset": 5969942,
+          "memory_offset": 13119488,
+          "size": 421016,
+          "compressed": true,
+          "stored": 21302,
+          "perms": "rw-"
+        },
+        {
+          "index": 3,
+          "kind": "bss",
+          "memory_offset": 13540504,
+          "size": 775016
+        }
+      ],
+      "rewrite_sites": 13965,
+      "rewrite_kinds": {
+        "x18": 13845,
+        "tpidrro_r": 109,
+        "cntpct": 42,
+        "tpidr_w": 3,
+        "svc": 76,
+        "tpidr_r": 2,
+        "W": 6,
+        "J": 10
+      },
+      "gates": {
+        "cntpct": 42,
+        "svc": 76
+      },
+      "patched_sha256": "cf258b2349a926cf503e321e29fd154139f36f18f7137de45c0529a8e70d4281",
+      "patched_size": 14946604,
+      "relocations": 34142,
+      "init_array_entries": 112,
+      "exports": 27161,
+      "equivalence": {
+        "sites": 13965,
+        "trials": 42680,
+        "effective": 37694,
+        "divergences": 0
+      }
+    },
+    "subsdk0": {
+      "nso_sha256": "366a266d8be18489795831224d6837884ac8ab1edf5c120754960bbfe9ac6664",
+      "build_id": "d0f13015e5badf2243d60a2bc9b978dddba80608000000000000000000000000",
+      "image_size": 6922240,
+      "segments": [
+        {
+          "index": 0,
+          "file_offset": 257,
+          "memory_offset": 0,
+          "size": 3401680,
+          "compressed": true,
+          "stored": 2365869,
+          "perms": "r-x"
+        },
+        {
+          "index": 1,
+          "file_offset": 2366126,
+          "memory_offset": 3403776,
+          "size": 2163092,
+          "compressed": true,
+          "stored": 1002875,
+          "perms": "rw-"
+        },
+        {
+          "index": 2,
+          "file_offset": 3369001,
+          "memory_offset": 5570560,
+          "size": 197392,
+          "compressed": true,
+          "stored": 16424,
+          "perms": "rw-"
+        },
+        {
+          "index": 3,
+          "kind": "bss",
+          "memory_offset": 5767952,
+          "size": 1154288
+        }
+      ],
+      "rewrite_sites": 10541,
+      "rewrite_kinds": {
+        "x18": 10541,
+        "J": 3
+      },
+      "gates": {},
+      "patched_sha256": "b2b3677e9e0f5a78bde6b957aaa97d8709b8ffb605da2c2fdf65cbdbf30af099",
+      "patched_size": 7378440,
+      "relocations": 19183,
+      "init_array_entries": 45,
+      "exports": 10882,
+      "equivalence": {
+        "sites": 10541,
+        "trials": 32204,
+        "effective": 28358,
+        "divergences": 0
+      }
+    }
+  },
+  "totals": {
+    "rewrite_sites": 45937,
+    "relocations": 530622,
+    "init_array_entries": 491,
+    "equivalence": {
+      "trials": 141209,
+      "effective": 123359,
+      "divergences": 0,
+      "mutation_negative_controls": 900,
+      "mutation_caught": 900
+    }
+  },
+  "romfs": {
+    "size": 2330751848,
+    "sha256": "8b9109d3acc57781573a1bf83500234f3e245a3217037ed83ccac1138ce7c051",
+    "files": 13031,
+    "ivfc_blocks": [
+      1,
+      1,
+      1,
+      1,
+      278,
+      142258
+    ],
+    "integrity": "FS header and all six IVFC levels verified; RSA signature not checked",
+    "mount_point": "RomFS",
+    "filesystem_access": null
+  },
+  "npdm": {
+    "services": 47,
+    "filesystem_access": "RomFS (read-only, whole partition)"
+  },
+  "verification": {
+    "equivalence": {
+      "sites": 45937,
+      "trials": 141209,
+      "effective": 123359,
+      "divergences": 0,
+      "mutation_negative_controls": 900,
+      "mutation_caught": 900,
+      "seed": 1
+    },
+    "structural": {
+      "status": "pass",
+      "tool": "third_party/d2r/structck.py",
+      "independent_denominator": true,
+      "per_module": {
+        "main": {
+          "rewrite_sites": 21431,
+          "call_windows": 2,
+          "gates": 0,
+          "jump_tables": 8,
+          "failures": 0
+        },
+        "sdk": {
+          "rewrite_sites": 14083,
+          "call_windows": 0,
+          "gates": 118,
+          "svc": 76,
+          "cntpct": 42,
+          "jump_tables": 10,
+          "failures": 0
+        },
+        "subsdk0": {
+          "rewrite_sites": 10541,
+          "call_windows": 0,
+          "gates": 0,
+          "jump_tables": 3,
+          "failures": 0
+        }
+      }
+    },
+    "note": "structck needs llvm-objdump; the shim in /tmp/llvmshim supplies the ELF wrapper it expects, so the independent denominator is real objdump output rather than the rewriter reading itself."
+  }
+}

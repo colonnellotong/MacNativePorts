@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""Minimal stand-in for `llvm-objcopy -I binary -O elf64-littleaarch64 --rename-section .data=.text,code in out`.
+
+structck.py only needs the raw bytes wrapped in an ELF whose single .text section starts at
+address 0, so llvm-objdump -d can disassemble them. That is written directly here instead of
+pulling in the full LLVM toolchain.
+"""
+import struct
+import sys
+
+args = sys.argv[1:]
+src = dst = None
+i = 0
+while i < len(args):
+    if args[i] in ('-I', '-O', '--rename-section'):
+        i += 2
+        continue
+    if src is None:
+        src = args[i]
+    else:
+        dst = args[i]
+    i += 1
+if src is None or dst is None:
+    sys.exit('llvm-objcopy shim: expected <input> <output>')
+
+blob = open(src, 'rb').read()
+EH, SH = 64, 64
+text_off = EH
+symtab_off = (text_off + len(blob) + 15) & ~15
+strtab_off = symtab_off + 24
+shstr_off = strtab_off + 1
+shoff = (shstr_off + 24 + 7) & ~7
+shstr = b'\0.text\0.symtab\0.strtab\0.shstrtab\0'
+
+ident = b'\x7fELF' + bytes([2, 1, 1, 0]) + bytes(8)
+eh = ident + struct.pack('<HHIQQQIHHHHHH', 1, 183, 1, 0, 0, shoff, 0, EH, 0, 0, SH, 5, 4)
+symtab = bytes(24)
+strtab = b'\0'
+
+
+def shdr(name, typ, flags, addr, off, size, link, info, align, ent):
+    return struct.pack('<IIQQQQIIQQ', name, typ, flags, addr, off, size, link, info, align, ent)
+
+
+shdrs = b''.join([
+    shdr(0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+    shdr(1, 1, 0x6, 0, text_off, len(blob), 0, 0, 16, 0),        # .text, ALLOC|EXECINSTR
+    shdr(7, 2, 0, 0, symtab_off, 24, 3, 1, 8, 24),                # .symtab
+    shdr(15, 3, 0, 0, strtab_off, 1, 0, 0, 1, 0),                 # .strtab
+    shdr(23, 3, 0, 0, shstr_off, len(shstr), 0, 0, 1, 0),         # .shstrtab
+])
+
+out = bytearray(shoff + SH * 5)
+out[:EH] = eh
+out[text_off:text_off + len(blob)] = blob
+out[symtab_off:symtab_off + 24] = symtab
+out[strtab_off:strtab_off + 1] = strtab
+out[shstr_off:shstr_off + len(shstr)] = shstr
+out[shoff:shoff + SH * 5] = shdrs
+open(dst, 'wb').write(bytes(out))
