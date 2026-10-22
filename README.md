@@ -109,6 +109,9 @@ patches/                   changes this project makes to upstream d2r_gfx, as ap
 docs/                      porting guide, screenshots
 ```
 
+[`docs/upstream-sync.md`](docs/upstream-sync.md) records the MacNativeGames revision last reviewed,
+the cross-game fixes carried over, and the game-specific changes deliberately left upstream.
+
 ## Acknowledgements and lineage
 
 MacNativePorts would not exist without

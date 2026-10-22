@@ -99,6 +99,9 @@ static void unprotect_page(range_t *r, uintptr_t p) {   // 调用方已把状态
     uint64_t g = atomic_fetch_add(&g_now, 1) + 1, l = atomic_load(&r->latest);
     atomic_store(&r->gen[p], g);
     while (l < g && !atomic_compare_exchange_weak(&r->latest, &l, g)) {}
+    /* A checker may read g_now before this page generation has been published and keep that value as its
+       last look. Move the global generation once more so every later write remains visible to the checker. */
+    atomic_fetch_add(&g_now, 1);
     atomic_store(&r->state[p], PG_NONE);
 }
 static int on_fault(void *addr, int is_write, void *uc) {
@@ -222,13 +225,14 @@ void nvn_dirty_protect(const void *addr, size_t len) {
     // 连续置成 PROT 的页合成一次 mprotect（逐页调用在首传大贴图时一帧上千次；选角页启动帧 5：4888 次）。
     // 已是 PROT / BUSY 的页断开连续段：不重复保护，也不碰别的线程正在改的页
     // Consecutive pages set to PROT are merged into one mprotect (per-page calls ran to over a thousand per frame when large textures were first uploaded; character select, startup frame 5: 4888 calls).
-    // Pages already PROT / BUSY break a run: they are not protected again, and pages another thread is changing are left alone
+    // Pages already PROT break a run. A BUSY page is waited out and retried so an unprotect in progress cannot leave it writable and untracked.
     uintptr_t run = 0; int open = 0;
     for (uintptr_t i = p; i <= q + 1; i++) {
         uint8_t st = PG_NONE;
         int took = i <= q && atomic_compare_exchange_strong(&r->state[i], &st, PG_BUSY);
         if (took && !open) { run = i; open = 1; }
         if (!took && open) { mp(r->base + (run << g_shift), (i - run) << g_shift, PROT_READ); for (uintptr_t k = run; k < i; k++) atomic_store(&r->state[k], PG_PROT); open = 0; }
+        if (!took && st == PG_BUSY && busy_wait(r, i)) i--;
     }
 }
 uint64_t nvn_dirty_now(void) { return atomic_load(&g_now); }

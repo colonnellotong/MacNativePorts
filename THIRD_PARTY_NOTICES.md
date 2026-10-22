@@ -30,6 +30,15 @@ Full text: `shared/gfx/LICENSE.txt`.
 
 Full text: `shared/gfx/LICENSE.deko3d.txt`.
 
+## nxnative
+
+Some Horizon synchronization and NVN texture-layout correctness fixes were identified and tested by
+[nxnative](https://github.com/jhaizhou/nxnative), then integrated through MacNativeGames.
+
+> MIT License — Copyright (c) 2026 jhaizhou
+
+Full text: `licenses/nxnative.txt`.
+
 ## bcdec
 
 Block-compression decoding, used by `shared/gfx/tex/nvn_bcdec.c`.

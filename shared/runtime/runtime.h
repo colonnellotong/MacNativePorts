@@ -47,7 +47,6 @@ int runtime_front_text_input(const RuntimeTextRequest *req, char *out, size_t ou
 void runtime_front_text_test(const char *op, const char *text);   /* diagnostics: "type" text, "enter", "esc" into the open bar */
 int runtime_core_away(void);          /* runtime/threads.c: a guest thread gives its virtual core up around a long host wait */
 void runtime_core_back(int *away);
-void runtime_core_checkpoint(uint64_t *regs, const char *module, uint64_t original);   /* threads.c: SVC entry preemption / SetThreadActivity park point */
 void runtime_stack_scan(uint64_t from, uint64_t span);   /* loader.c: print the strings a stack slice points at */
 void runtime_scan_guest(const char *needle);             /* loader.c: find a run-time composed string anywhere in guest memory */
 void runtime_stack_text(uint64_t from, uint64_t span);     /* loader.c: dump the printable runs inside a stack slice */

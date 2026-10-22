@@ -331,7 +331,9 @@ static int sig_obj(uint32_t h, int *bad) {    // 1=已触发（持 G） | 1 = si
     }
 }
 static void wake_sync_waiters(void) {
-    for (thr_t *w = g_wait; w; ) { thr_t *n = w->next; if (w->wkind == 4) wake(w, -1); w = n; }
+    for (thr_t *w = g_wait; w; ) { thr_t *n = w->next;
+        if (w->wkind == 4) { int hit = w->nwh > 4, bad = 0; for (int i = 0; !hit && i < w->nwh; i++) hit = sig_obj(w->wh[i], &bad) || bad; if (hit) wake(w, -1); }
+        w = n; }
 }
 
 static int64_t now_mono_ns(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec * 1000000000ll + ts.tv_nsec; }
@@ -340,6 +342,21 @@ void dm_guest_clock_advanced(void) {
     pthread_mutex_lock(&G);
     for (thr_t *t = g_wait; t; t = t->next) if (t->wkind) pthread_cond_signal(&t->cv);
     pthread_mutex_unlock(&G);
+}
+
+// Service SystemEvent binding: guest SystemEventType address -> writable kernel-event handle. A binding ends when
+// its write handle is closed, so recreating a SystemEvent at the same address receives a fresh event.
+static struct { void *ev; uint32_t wh; } g_se[512];
+static int g_nse;
+static pthread_mutex_t g_se_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t se_find(void *ev) {   // caller holds g_se_lock
+    for (int i = 0; i < g_nse; i++) if (g_se[i].ev == ev) return g_se[i].wh;
+    return 0;
+}
+static void se_unbind(uint32_t wh) {   // caller holds G
+    pthread_mutex_lock(&g_se_lock);
+    for (int i = 0; i < g_nse; ) if (g_se[i].wh == wh) g_se[i] = g_se[--g_nse]; else i++;
+    pthread_mutex_unlock(&g_se_lock);
 }
 
 // 处理线程 / 同步类 SVC；返回 1 = 已处理
@@ -574,7 +591,7 @@ int svc_thread(int num, uint64_t *regs) {
         if (type != 0) {
             int32_t nv = val + 1;
             if (type == 2) {
-                if (cnt <= 0) nv = nw > 0 ? val - 1 : val + 1;
+                if (cnt <= 0) nv = nw > 0 ? val - 2 : val + 1;
                 else nv = nw == 0 ? val + 1 : nw <= cnt ? val - 1 : val;
             }
             uint32_t e = (uint32_t)val;
@@ -638,6 +655,7 @@ int svc_thread(int num, uint64_t *regs) {
         pthread_mutex_lock(&G);
         unsigned i = (uint32_t)regs[0] - 0x1000;int valid=0;
         if (i > 0 && i < MAX_H && (g_h[i].type == O_EVENT_R || g_h[i].type == O_EVENT_W)) {
+            if (g_h[i].type == O_EVENT_W) se_unbind((uint32_t)regs[0]);
             valid=1;event_t *e = g_h[i].obj; if (--e->refs == 0) free(e);
             g_h[i].type = O_FREE; g_h[i].obj = NULL;
         } else if (i > 0 && i < MAX_H && (g_h[i].type == O_SESSION || g_h[i].type == O_TMEM)) {
@@ -665,13 +683,6 @@ int svc_thread(int num, uint64_t *regs) {
 // ---------- SystemEvent of the service layer ----------
 // Real device: the service hands the read end of a kernel event to the client, and the guest waits on it through SDK nn::os. Host: on a guest thread, call the SDK's own
 // CreateSystemEvent(inter-process=true), and the SDK creates the kernel event through SVC 0x45; the write-end handle is recorded, after which any thread (including the host audio thread) can signal it.
-static struct { void *ev; uint32_t wh; } g_se[512];
-static int g_nse;
-static pthread_mutex_t g_se_lock = PTHREAD_MUTEX_INITIALIZER;
-static uint32_t se_find(void *ev) {
-    for (int i = 0; i < g_nse; i++) if (g_se[i].ev == ev) return g_se[i].wh;
-    return 0;
-}
 void hle_bind_system_event(void *ev, int autoclear) {      // 必须在客体线程上调（要执行 SDK 代码） | Must be called on a guest thread (it has to execute SDK code)
     pthread_mutex_lock(&g_se_lock); uint32_t wh = se_find(ev); pthread_mutex_unlock(&g_se_lock);
     if (wh) return;
@@ -687,14 +698,23 @@ void hle_bind_system_event(void *ev, int autoclear) {      // 必须在客体线
     g_se[g_nse].ev = ev; g_se[g_nse++].wh = wh;
     pthread_mutex_unlock(&g_se_lock);
 }
-void hle_signal_system_event(void *ev) {   // 未绑定的按手动清除即时绑定（只能在客体线程上发生） | An unbound one is bound on the spot as manual-clear (can only happen on a guest thread)
-    pthread_mutex_lock(&g_se_lock); uint32_t wh = se_find(ev); pthread_mutex_unlock(&g_se_lock);
-    if (!wh) { hle_bind_system_event(ev, 0); pthread_mutex_lock(&g_se_lock); wh = se_find(ev); pthread_mutex_unlock(&g_se_lock); }
-    pthread_mutex_lock(&G);
-    event_t *e = h_get(wh, O_EVENT_W);
-    if (!e) die("SystemEvent 写端句柄失效 %#x", wh);
-    e->signaled = 1; wake_sync_waiters();
-    pthread_mutex_unlock(&G);
+static uint64_t g_se_skipped;
+void hle_signal_system_event(void *ev) {
+    for (int bound = 0; ; bound = 1) {
+        pthread_mutex_lock(&G);
+        pthread_mutex_lock(&g_se_lock); uint32_t wh = se_find(ev); pthread_mutex_unlock(&g_se_lock);
+        if (wh) {
+            event_t *e = h_get(wh, O_EVENT_W);
+            if (!e) die("SystemEvent 写端句柄失效 %#x", wh);
+            e->signaled = 1; wake_sync_waiters(); pthread_mutex_unlock(&G); return;
+        }
+        int guest = (g_keythr ? pthread_getspecific(g_keythr) : NULL) != NULL;
+        if (!guest && g_se_skipped++ < 8) LOG("SystemEvent %p 未绑定（已被游戏销毁），跳过宿主线程触发", ev);
+        pthread_mutex_unlock(&G);
+        if (!guest) return;
+        if (bound) die("SystemEvent %p 绑定后仍查不到", ev);
+        hle_bind_system_event(ev, 0);
+    }
 }
 
 // ---------- IPC support (ipc.c): sessions, transfer memory and service-owned events ----------

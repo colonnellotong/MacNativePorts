@@ -2402,8 +2402,8 @@ static void wb_note(const tex_t *t) {
     TILELOG(t, "GPU render (owned %d)", gpu_owned(t->serial));
     if (!atomic_load(&g_wb_on) || !t->mem || !t->L.size) return;
     id o = serial_get(t->serial); if (!o) return;
-    nvn_dirty_protect(t->mem, t->L.size);   // CPU writes after this rendering show up in nvn_dirty_since
     uint64_t stamp = nvn_dirty_now(), k = t->serial;
+    nvn_dirty_protect(t->mem, t->L.size);   // stamp first: a write during protection must count as newer
     pthread_mutex_lock(&g_smu);
     wb_ent *e = nvn_hm_get(&g_wb, &k);
     if (e) { e->stamp = stamp; e->t = *t; pthread_mutex_unlock(&g_smu); return; }
@@ -2572,6 +2572,39 @@ static int tex_swizzle_sel(const tex_t *t, const uint8_t *view_sel, int format, 
 }
 static int tex_swizzle(const tex_t *t, int format, MTLTextureSwizzleChannels *out) { return tex_swizzle_sel(t, NULL, format, out); }
 static int swizzle_eq(MTLTextureSwizzleChannels a, MTLTextureSwizzleChannels b) { return a.red == b.red && a.green == b.green && a.blue == b.blue && a.alpha == b.alpha; }
+// Guest or mod data can contain descriptor fields Metal rejects by aborting the process. Clamp every guest-controlled
+// field to the hardware limits. Normal game descriptors are already inside these bounds and remain unchanged.
+static void tex_desc_fixup(const tex_t *t, MTLTextureDescriptor *d) {
+    static uint64_t capped;
+    char why[160] = "";
+    NSUInteger w = d.width, h = d.height, z = d.depth;
+    NSUInteger arr0 = d.arrayLength, smp0 = d.sampleCount, lv0 = d.mipmapLevelCount, w0 = d.width, h0 = d.height, z0 = d.depth;
+    int is_msaa = d.textureType == MTLTextureType2DMultisample || d.textureType == MTLTextureType2DMultisampleArray;
+    if (w < 1 || w > 16384) { d.width = w = w < 1 ? 1 : 16384; strlcat(why, "宽, ", sizeof why); }
+    if (h < 1 || h > 16384) { d.height = h = h < 1 ? 1 : 16384; strlcat(why, "高, ", sizeof why); }
+    if (z < 1 || z > 2048) { d.depth = z = z < 1 ? 1 : 2048; strlcat(why, "深, ", sizeof why); }
+    NSUInteger biggest = w > h ? w : h;
+    if (d.textureType == MTLTextureType3D && z > biggest) biggest = z;
+    unsigned allowed = 1;
+    for (NSUInteger v = biggest; v > 1; v >>= 1) allowed++;
+    if (d.mipmapLevelCount > allowed) { d.mipmapLevelCount = allowed; strlcat(why, "mip 级数, ", sizeof why); }
+    if (d.mipmapLevelCount < 1) { d.mipmapLevelCount = 1; strlcat(why, "mip 级数, ", sizeof why); }
+    if (d.arrayLength < 1 || d.arrayLength > 2048) { d.arrayLength = d.arrayLength < 1 ? 1 : 2048; strlcat(why, "数组长度, ", sizeof why); }
+    if (!(d.sampleCount == 1 || d.sampleCount == 2 || d.sampleCount == 4 || d.sampleCount == 8)) {
+        d.sampleCount = 1; strlcat(why, "采样数, ", sizeof why);
+    }
+    if (d.sampleCount > 1 && !is_msaa) { d.sampleCount = 1; strlcat(why, "采样数, ", sizeof why); }
+    if (d.sampleCount > 1) d.mipmapLevelCount = 1;
+    if (!why[0]) return;
+    if (capped++ < 6 || capped % 500 == 0) {
+        size_t n = strlen(why); if (n > 2) why[n - 2] = 0;
+        MLOG("[tex] ser=%llu %ux%ux%u target %d descriptor %lux%lux%lu arr=%lu smp=%lu levels=%lu: cap %s to %lux%lux%lu arr=%lu smp=%lu levels=%lu (total %llu)",
+             (unsigned long long)t->serial, (uint32_t)t->d.width, (uint32_t)t->d.height, (uint32_t)t->d.depth, (int)t->d.target,
+             (unsigned long)w0, (unsigned long)h0, (unsigned long)z0, (unsigned long)arr0, (unsigned long)smp0, (unsigned long)lv0,
+             why, (unsigned long)d.width, (unsigned long)d.height, (unsigned long)d.depth, (unsigned long)d.arrayLength,
+             (unsigned long)d.sampleCount, (unsigned long)d.mipmapLevelCount, (unsigned long long)capped);
+    }
+}
 static MTLTextureDescriptor *tex_desc(const tex_t *t, int packaged) {
     uint32_t pf = 0; uint8_t swz[4];
     if (!nvn_fmt_to_mtl(t->d.format, &pf, swz) || !pf) { RED_ONCE(0, "贴图格式 %#x Metal 无对应（首例）", t->d.format); return nil; }
@@ -2588,10 +2621,11 @@ static MTLTextureDescriptor *tex_desc(const tex_t *t, int packaged) {
         case 5: d.textureType = MTLTextureType2DMultisample; d.sampleCount = t->d.samples; d.mipmapLevelCount = 1; break;
         case 6: d.textureType = MTLTextureType2DMultisampleArray; d.sampleCount = t->d.samples; d.arrayLength = t->d.depth; d.mipmapLevelCount = 1; break;
         case 8: d.textureType = MTLTextureTypeCube; break;
-        case 9: d.textureType = MTLTextureTypeCubeArray; d.arrayLength = t->d.depth; break;
+        case 9: d.textureType = MTLTextureTypeCubeArray; d.arrayLength = MAX(t->d.depth / 6, 1u); break;   // NVN depth counts layer-faces, Metal arrayLength counts cubes
         case 10: RED_ONCE(1, "缓冲贴图（TARGET_BUFFER）未实现"); return nil;
         default: d.textureType = MTLTextureType2D; break;
     }
+    tex_desc_fixup(t, d);
     d.storageMode = MTLStorageModePrivate;   // 渲染目标与素材都放 GPU 私有存储（可用无损压缩） | Render targets and assets both go in GPU private storage (lossless compression available)
     d.usage = MTLTextureUsageShaderRead | (fmt_compressed(t->d.format) || packaged ? 0 : MTLTextureUsageRenderTarget)
             | (t->d.flags & NVN_TEXTURE_FLAGS_IMAGE ? MTLTextureUsageShaderWrite : 0)   // 图像用途：着色器可写（计算核生成 3D 调色表等） | Image usage: shader-writable (compute kernels generating the 3D color lookup table, etc.)
@@ -3231,11 +3265,10 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, reup_key *key
         if (ul && (!ulw || (t->d.width == ulw && t->d.height == ulh))) { uint64_t nz = 0, n = t->L.size; const uint8_t *m = t->mem; for (uint64_t i = 0; i < n; i += 8) if (*(const uint64_t *)(m + i)) nz++;
             MLOG("[uplog] ser=%llu fmt=%#x %ux%u lv=%u tgt=%d size=%llu nz8=%llu/%llu pool=%p flags=%#x host=%p off=%lld frame=%llu", (unsigned long long)t->serial, t->d.format, t->d.width, t->d.height, t->d.levels, t->d.target,
                  (unsigned long long)n, (unsigned long long)nz, (unsigned long long)(n / 8), (void *)t->pool, t->pool ? t->pool->flags : 0, t->pool ? (void *)t->pool->host : NULL, (long long)t->off, (unsigned long long)atomic_load(&g_cur_frame)); } }
+    *stamp = nvn_dirty_now();   // stamp first: writes during protection or copying must count as newer
     if (!pkg_hashed(t)) nvn_dirty_protect(t->mem, t->L.size);
-    *stamp = nvn_dirty_now();
     int bw, bh, bpb = nvn_fmt_bpb(t->d.format, &bw, &bh);
-    unsigned layers = (t->d.target == 4 || t->d.target == 9) ? t->d.depth : t->d.target == 8 ? 6 : t->d.target == 3 ? t->d.height : 1;
-    if (t->d.target == 9) layers *= 6;
+    unsigned layers = (t->d.target == 4 || t->d.target == 9) ? t->d.depth : t->d.target == 8 ? 6 : t->d.target == 3 ? t->d.height : 1;   // cube array depth = layer-faces
     int tca = tex_astc(t);   // TOTK: BC1 -> ASTC 4x4 (see tex_astc)
     int tck = !tca && tc_pf(t->d.format) != MTLPixelFormatInvalid && d.pixelFormat == tc_pf(t->d.format);   // TOTK: BC2/3/4/5/7 transcoded (tex_tc decided in tex_desc)
     int tco = t->d.format == 0x49 ? 8 : 16;   // output bytes per block
@@ -3433,7 +3466,7 @@ static id<MTLTexture> tex_mtl(const tex_t *ct) {
             }
             if (clean && atomic_load_explicit(&g_up_lost_n, memory_order_relaxed) && up_lost_take(pk->tex)) { clean = 0; uint64_t k = atomic_load(&g_up_lost_redo); if (k <= 3 || !atomic_load(&g_up_lost_n)) MLOG("上传被丢的贴图 ser=%llu 重传（累计 %llu 张，记录里还剩 %d 张）", (unsigned long long)t->serial, (unsigned long long)k, atomic_load(&g_up_lost_n)); }
             if (clean) {
-                if (dirtycheck() && full_hash(t->mem, t->L.size) != pk->hash) {
+                if (dirtycheck() && full_hash(t->mem, t->L.size) != pk->hash && !nvn_dirty_since(t->mem, t->L.size, pk->stamp)) {
                     if (!g_pkg_miss++) MLOG("【红】脏页漏检：贴图 ser=%llu 池内容已变但未检出", t->serial);
                     static int fix = -1; if (fix < 0) fix = getenv("DM_NVN_DIRTYFIX") != NULL;   // TOTK diagnostic: DM_NVN_DIRTYFIX=1 re-uploads on a missed change
                     if (fix) clean = 0;
@@ -3442,7 +3475,7 @@ static id<MTLTexture> tex_mtl(const tex_t *ct) {
             }
             TILELOG(t, "re-upload from the pool bytes");
             uint64_t st; reup_key nk; g_mip_nodrop = pk->owned; id<MTLTexture> nt = pkg_upload(t, &st, &nk); g_mip_nodrop = 0;   // 池内容变了（流式素材写进同一存储）：换新贴图，在途绘制仍读旧的 | Pool content changed (streamed assets written into the same storage): switch to a new texture; in-flight draws still read the old one
-            if (nt) { id<MTLTexture> old = pk->tex; pk->tex = nt; reup_retire(old, &pk->key); pk->key = nk; if (pk->hashed) pk->chash = h; ser_bump(t->serial); pk->stamp = st; pk->seen = nvn_dirty_now(); g_pkg_reuploads++; if (dirtycheck()) pk->hash = full_hash(t->mem, t->L.size); }
+            if (nt) { id<MTLTexture> old = pk->tex; pk->tex = nt; reup_retire(old, &pk->key); pk->key = nk; if (pk->hashed) pk->chash = h; ser_bump(t->serial); pk->stamp = st; pk->seen = st; g_pkg_reuploads++; if (dirtycheck()) pk->hash = full_hash(t->mem, t->L.size); }
             return pk->tex;
         }
         TILELOG(t, "first upload from the pool bytes");
@@ -3450,7 +3483,7 @@ static id<MTLTexture> tex_mtl(const tex_t *ct) {
         pk->lo = (uintptr_t)t->mem; pk->hi = pk->lo + t->L.size;
         pk->tex = pkg_upload(t, &pk->stamp, &pk->key);
         if (!pk->tex) return nil;
-        pk->seen = nvn_dirty_now(); g_pkg_uploads++; if (dirtycheck()) pk->hash = full_hash(t->mem, t->L.size);
+        pk->seen = pk->stamp; g_pkg_uploads++; if (dirtycheck()) pk->hash = full_hash(t->mem, t->L.size);
         serial_put(t->serial, pk);
         pk->owned = gpu_owned(t->serial);   // after it is in the table: a later mark finds it there (pkg_owned_locked)
         if ((pk->hashed = pkg_hashed(t))) { pk->chash = pkg_hash(t->mem, t->L.size); pk->csub = g_sub_serial; }
