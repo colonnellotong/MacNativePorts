@@ -13,7 +13,7 @@ behaviour rather than merged by path.
 
 ## Last review
 
-- Reviewed upstream through `2338bb0533b94fbbe4558eaea6f459bb135d6a2c` (2026-10-22).
+- Reviewed upstream through `9fe3fdc1d08ce5e1a64d120f257d79cc2dc7c0ca` (2026-11-08).
 - The old upstream `by3-port` branch has been merged into `main` and removed. Use `upstream/main`.
 - The By3 runtime itself has no material change needed by Dora since this repository was created.
 
@@ -27,6 +27,14 @@ The following cross-game fixes from the newer TOTK host were ported:
 - `f864eb0`: clamp invalid guest texture descriptors before Metal validates them and aborts.
 - `dab728a`: match Horizon kernel synchronization for `SignalToAddress`, SystemEvent rebinding and
   targeted synchronization wakeups.
+- `9505582`: keep a dirty-page range alive while its pages are being protected, closing a race with
+  memory-pool retirement.
+- `0dc98066`: retire visibility overflow buffers without evicting the reusable ring buffers from
+  Metal residency.
+
+The newer By3 GPU-timeline indirect-draw path (`426f1d79`) is intentionally not enabled for Dora.
+It fixes Bayonetta 3's per-object visibility-driven indirect records; Dora has not shown that record
+shape, and the implementation carries a large By3-specific look-ahead and compute pass.
 
 TOTK presentation features such as 240 fps timing, MetalFX modes, ultrawide output, pipeline archives,
 shader seed lists and TOTK render-pass recognition are intentionally not copied into the shared layer.

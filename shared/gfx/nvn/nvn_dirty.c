@@ -219,7 +219,10 @@ int nvn_dirty_tracked(const void *addr, size_t len) {
 // 设只读：先把页标成 BUSY，mprotect 落地后才标 PROT（次序与不变式见文件头的状态说明）
 // Set read-only: mark the page BUSY first, and mark it PROT only after mprotect has landed (for the order and the invariant see the state notes at the top of the file)
 void nvn_dirty_protect(const void *addr, size_t len) {
-    if (!len || !nvn_dirty_tracked(addr, len)) return;
+    /* Keep the range slot alive from lookup through the final mprotect. Pool retirement uses the same mutex, so it
+       cannot make the pages writable and recycle this slot while protection is still being installed. */
+    pthread_mutex_lock(&g_slot_mu);
+    if (!len || !nvn_dirty_tracked(addr, len)) { pthread_mutex_unlock(&g_slot_mu); return; }
     range_t *r = find((uintptr_t)addr);
     uintptr_t a = (uintptr_t)addr, p = (a - r->base) >> g_shift, q = (a + len - 1 - r->base) >> g_shift;
     // 连续置成 PROT 的页合成一次 mprotect（逐页调用在首传大贴图时一帧上千次；选角页启动帧 5：4888 次）。
@@ -234,6 +237,7 @@ void nvn_dirty_protect(const void *addr, size_t len) {
         if (!took && open) { mp(r->base + (run << g_shift), (i - run) << g_shift, PROT_READ); for (uintptr_t k = run; k < i; k++) atomic_store(&r->state[k], PG_PROT); open = 0; }
         if (!took && st == PG_BUSY && busy_wait(r, i)) i--;
     }
+    pthread_mutex_unlock(&g_slot_mu);
 }
 uint64_t nvn_dirty_now(void) { return atomic_load(&g_now); }
 int nvn_dirty_since(const void *addr, size_t len, uint64_t stamp) {
