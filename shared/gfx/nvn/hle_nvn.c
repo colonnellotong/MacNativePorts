@@ -1810,7 +1810,7 @@ NVN(nvnCommandBufferDrawElementsInstanced, void, NVNcommandBuffer *c, NVNdrawPri
     int bv, int bi, int inst) {
     *REC(c, OP_DRAW_IDX, p_draw_idx) = (p_draw_idx){pr, it, n, bv, bi, inst, ib}; hw_fix(CB(c), 44);   /* assumed: same 6-parameter draw macro as the base-vertex form (unverified) */
 }
-// Indirect draws (Bayonetta 3; TOTK never calls them): arguments in memory, resolved at replay (nvn_mtl.m draw_resolve).
+// Indirect draws: arguments in memory, resolved on the GPU timeline when eligible (nvn_mtl.m draw_resolve).
 NVN(nvnCommandBufferDrawArraysIndirect, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, NVNbufferAddress args) {
     uint8_t *p = rec(c, OP_DRAW, DRAW_TAIL_AT(p_draw) + sizeof(p_draw_indirect));
     *(p_draw *)p = (p_draw){pr, 0, 0, 0, 0}; *(p_draw_indirect *)(p + DRAW_TAIL_AT(p_draw)) = (p_draw_indirect){DRAW_INDIRECT_MAGIC, args, 0, 0, 0};

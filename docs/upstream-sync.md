@@ -13,7 +13,7 @@ behaviour rather than merged by path.
 
 ## Last review
 
-- Reviewed upstream through `9fe3fdc1d08ce5e1a64d120f257d79cc2dc7c0ca` (2026-11-08).
+- Reviewed upstream through `6bc0ec8f9f62bca1b01bd7b714e7306b8523f06f` (2026-11-11).
 - The old upstream `by3-port` branch has been merged into `main` and removed. Use `upstream/main`.
 - The By3 runtime itself has no material change needed by Dora since this repository was created.
 
@@ -31,10 +31,13 @@ The following cross-game fixes from the newer TOTK host were ported:
   memory-pool retirement.
 - `0dc98066`: retire visibility overflow buffers without evicting the reusable ring buffers from
   Metal residency.
+- `426f1d79`: resolve eligible indirect-draw arguments on the GPU timeline and replay them through
+  Metal indirect draws. The measurement-only Bayonetta 3 experiments from that commit were omitted.
 
-The newer By3 GPU-timeline indirect-draw path (`426f1d79`) is intentionally not enabled for Dora.
-It fixes Bayonetta 3's per-object visibility-driven indirect records; Dora has not shown that record
-shape, and the implementation carries a large By3-specific look-ahead and compute pass.
+Since the previous review, `games/by3` has no newer `d2r_gfx` change. Most upstream graphics work is
+for Ocarina of Time (Switch 2), TOTK/BOTW features, shader contribution and game-specific presentation.
+Those changes use different shader models, render-pass identities, UI and runtime assumptions, so they
+are not part of Dora's shared layer.
 
 TOTK presentation features such as 240 fps timing, MetalFX modes, ultrawide output, pipeline archives,
 shader seed lists and TOTK render-pass recognition are intentionally not copied into the shared layer.

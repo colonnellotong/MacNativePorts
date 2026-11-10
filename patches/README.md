@@ -53,3 +53,15 @@ something wrong.
 When the two ends disagree on sample count, the serials, sizes, formats and flags of both are
 logged, once each. This is what identified the 1 → 2 copy above; it costs nothing when no such copy
 happens and stays useful for the next game.
+
+## 4. GPU-timeline indirect draws
+
+**Files:** `shared/gfx/nvn/nvn_mtl.m`, `shared/gfx/nvn/nvn_render_stream.h`
+
+Ported from MacNativeGames commit `426f1d79`. Eligible NVN indirect-draw records are batched and their
+Metal arguments are resolved by a compute pass in GPU order, so a draw can consume visibility or count
+data produced earlier in the same submission. Quads and 8-bit indices keep the established CPU path;
+`TOTK_GPU_INDIRECT=0` disables the GPU path for comparison.
+
+Only the reusable rendering fix was ported. Bayonetta 3's two measurement-only environment experiments
+were deliberately left out.

@@ -1251,6 +1251,8 @@ static inline void enc_r_args(id<MTL4RenderCommandEncoder> e, MTLRenderStages s,
 static inline void enc_r_draw(id<MTL4RenderCommandEncoder> e, MTLPrimitiveType p, NSUInteger v, NSUInteger n) { if (rs_using(e)) rs_put((nvn_encode_packet){.op=RS_DRAW,.u={p,v,n}},1); else [e drawPrimitives:p vertexStart:v vertexCount:n]; }
 static inline void enc_r_draw_instanced(id<MTL4RenderCommandEncoder> e, MTLPrimitiveType p, NSUInteger v, NSUInteger n, NSUInteger i, NSUInteger b) { if (rs_using(e)) rs_put((nvn_encode_packet){.op=RS_INSTANCED,.u={p,v,n,i,b}},1); else [e drawPrimitives:p vertexStart:v vertexCount:n instanceCount:i baseInstance:b]; }
 static inline void enc_r_draw_indexed(id<MTL4RenderCommandEncoder> e, MTLPrimitiveType p, NSUInteger n, MTLIndexType t, uint64_t gpu, NSUInteger len, NSUInteger i, NSInteger bv, NSUInteger bi) { if (rs_using(e)) rs_put((nvn_encode_packet){.op=RS_INDEXED,.u={p,n,t,gpu,len,i,(uint64_t)bv,bi}},1); else [e drawIndexedPrimitives:p indexCount:n indexType:t indexBuffer:gpu indexBufferLength:len instanceCount:i baseVertex:bv baseInstance:bi]; }
+static inline void enc_r_draw_indirect(id<MTL4RenderCommandEncoder> e, MTLPrimitiveType p, uint64_t args) { if (rs_using(e)) rs_put((nvn_encode_packet){.op=RS_INDIRECT,.u={p,args}},1); else [e drawPrimitives:p indirectBuffer:args]; }
+static inline void enc_r_draw_indexed_indirect(id<MTL4RenderCommandEncoder> e, MTLPrimitiveType p, MTLIndexType t, uint64_t gpu, NSUInteger len, uint64_t args) { if (rs_using(e)) rs_put((nvn_encode_packet){.op=RS_INDEXED_INDIRECT,.u={p,t,gpu,len,args}},1); else [e drawIndexedPrimitives:p indexType:t indexBuffer:gpu indexBufferLength:len indirectBuffer:args]; }
 static inline void enc_r_store(id<MTL4RenderCommandEncoder> e, int depth, MTLStoreAction action, NSUInteger index) { if (rs_using(e)) rs_put((nvn_encode_packet){.op=RS_STORE,.u={(uint64_t)depth,action,index}},0); else if (depth == 1) [e setDepthStoreAction:action]; else if (depth == 2) [e setStencilStoreAction:action]; else [e setColorStoreAction:action atIndex:index]; }
 static inline id<MTL4ComputeCommandEncoder> enc_c_begin(MTLComputePassDescriptor *d) { (void)d; blit_close(); rs_sync(); pt_mark(g_cb, 'C', nil); id<MTL4ComputeCommandEncoder> e = [g_cb computeCommandEncoder]; if (bar_start_on()) [e barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:bar_vis()]; [e setArgumentTable:g_ct]; return e; }
 static inline id<MTLComputeCommandEncoder> enc_c_begin_concurrent(id<MTLCommandBuffer> cb) { return [cb computeCommandEncoderWithDispatchType:MTLDispatchTypeConcurrent]; }
@@ -8937,6 +8939,98 @@ static void widen_indices_gpu(const p_draw_idx *di) {
     g_wide[g_nwide++] = (typeof(g_wide[0])){di, wb, wo};
     static int once; if (!once++) MLOG("[totk] 8-bit indices written earlier in the submit are widened on the GPU");
 }
+/* Indirect draws resolved on the GPU timeline. A game's colour pass can use visibility data written by the depth pre-pass
+   in the same submission. Reading those arguments on the CPU sees the previous completed frame and drops newly visible
+   objects. The first eligible indirect record scans forward to the next possible GPU write and resolves the batch into
+   Metal indirect arguments with a compute dispatch. Quads and 8-bit indices keep the CPU path. Set
+   TOTK_GPU_INDIRECT=0 to restore CPU replay. */
+static int ind_gpu_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("TOTK_GPU_INDIRECT"); v = !(e && !strcmp(e, "0")); MLOG("indirect draw arguments %s", v ? "resolved on the GPU timeline" : "read on the CPU at replay (TOTK_GPU_INDIRECT=0)"); } return v; }
+typedef struct { uint64_t cnt, args; uint32_t index, words; } ind_in;
+#define IND_HB 32768
+static const void *g_ind_key[IND_HB]; static uint64_t g_ind_val[IND_HB]; static uint64_t g_ind_sub = ~0ull; static int g_ind_n;
+static uint64_t g_ind_batches, g_ind_draws;
+static uint64_t *ind_slot(const void *rec, int add) {
+    if (g_ind_sub != g_sub_serial) { memset(g_ind_key, 0, sizeof g_ind_key); g_ind_n = 0; g_ind_sub = g_sub_serial; }
+    for (uint32_t i = (uint32_t)(((uintptr_t)rec >> 3) * 0x9E3779B97F4A7C15ull >> 49) & (IND_HB - 1), n = 0; n < IND_HB; i = (i + 1) & (IND_HB - 1), n++) {
+        if (g_ind_key[i] == rec) return &g_ind_val[i];
+        if (!g_ind_key[i]) { if (!add || g_ind_n >= IND_HB / 2) return NULL; g_ind_key[i] = rec; g_ind_val[i] = 0; g_ind_n++; return &g_ind_val[i]; }
+    }
+    return NULL;
+}
+static const p_draw_indirect *ind_tail(int op, const void *rec, uint32_t size) {
+    int indexed = op == OP_DRAW_IDX; size_t at = indexed ? DRAW_TAIL_AT(p_draw_idx) : DRAW_TAIL_AT(p_draw);
+    if (size < 8 + at + sizeof(p_draw_indirect)) return NULL;
+    const p_draw_indirect *t = (const p_draw_indirect *)((const uint8_t *)rec + at);
+    if (t->magic != DRAW_INDIRECT_MAGIC) return NULL;
+    if (indexed ? ((const p_draw_idx *)rec)->itype == 0 || ((const p_draw_idx *)rec)->prim == 7 : ((const p_draw *)rec)->prim == 7) return NULL;
+    return t;
+}
+static ind_in *g_ind_in; static const void **g_ind_rec; static uint32_t g_ind_cap, g_ind_m;
+static int ind_add(int op, const void *rec, uint32_t size) {
+    const p_draw_indirect *t = ind_tail(op, rec, size); if (!t) return 1;
+    uint64_t *s = ind_slot(rec, 0); if (s && *s) return 1;
+    void *mb; uint64_t mo, ga, gc = 0; int words = op == OP_DRAW_IDX ? 5 : 4;
+    if (!mtl_gpu_addr(t->args, (uint64_t)words * 4, &mb, &mo, &ga) || (ga & 3)) return 1;
+    if (t->count_addr && (!mtl_gpu_addr(t->count_addr, 4, &mb, &mo, &gc) || (gc & 3))) return 1;
+    if (g_ind_m == g_ind_cap) { g_ind_cap = g_ind_cap ? g_ind_cap * 2 : 1024; g_ind_in = realloc(g_ind_in, g_ind_cap * sizeof *g_ind_in); g_ind_rec = realloc(g_ind_rec, g_ind_cap * sizeof *g_ind_rec); }
+    if (g_ind_m >= 8192) return 0;
+    if (g_nupd) { upd_guard(t->args, t->args + (uint64_t)words * 4); if (t->count_addr) upd_guard(t->count_addr, t->count_addr + 4); }
+    g_ind_in[g_ind_m] = (ind_in){gc, ga, (uint32_t)t->index, (uint32_t)words}; g_ind_rec[g_ind_m++] = rec;
+    return 1;
+}
+enum { IND_GO, IND_STOP };
+static int ind_scan(const uint8_t *p, int depth) {
+    for (int guard = 0; guard < 1000000; guard++) {
+        op_hdr h; memcpy(&h, p, sizeof h); const void *a = p + 8;
+        switch (h.op) {
+            case OP_END: return IND_GO;
+            case OP_JUMP: { const uint8_t *t; memcpy(&t, a, 8); p = t; continue; }
+            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); if (depth >= 8 || ind_scan((const uint8_t *)t, depth + 1) == IND_STOP) return IND_STOP; break; }
+            case OP_SET_RT: if (!R.has_rt || !rt_same(&R.rt, (const p_set_rt *)a)) return IND_STOP; break;
+            case OP_COPY_B2B: case OP_UPDATE_UB: case OP_COPY_B2T: case OP_COPY_T2B: case OP_COPY_T2T: case OP_CLEAR_TEX: case OP_DISPATCH: case OP_BARRIER: return IND_STOP;
+            case OP_DRAW: case OP_DRAW_IDX: if (!ind_add(h.op, a, h.size)) return IND_STOP; break;
+            default: break;
+        }
+        p += h.size;
+    }
+    return IND_STOP;
+}
+static void ind_resolve(const uint8_t *op) {
+    static id<MTLComputePipelineState> ps; static id<MTL4ArgumentTable> at;
+    if (!ps) {
+        NSError *e = nil;
+        id<MTLLibrary> lib = [g_dev newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\n"
+            "struct In { device const uint *cnt; device const uint *args; uint index, words; };\n"
+            "kernel void ind(device const In *in [[buffer(0)]], device uint *out [[buffer(1)]], constant uint &n [[buffer(2)]], uint i [[thread_position_in_grid]]) {"
+            " if (i >= n) return; In x = in[i]; device uint *o = out + 5 * i;"
+            " for (uint k = 0; k < x.words; k++) o[k] = x.args[k];"
+            " if (x.cnt && x.index >= *x.cnt) o[1] = 0; }" options:nil error:&e];
+        id<MTLFunction> fn = [lib newFunctionWithName:@"ind"];
+        ps = fn ? [g_dev newComputePipelineStateWithFunction:fn error:&e] : nil;
+        MTL4ArgumentTableDescriptor *ad = [MTL4ArgumentTableDescriptor new]; ad.maxBufferBindCount = 3; at = [g_dev newArgumentTableWithDescriptor:ad error:&e];
+        if (!ps || !at) MDIE("indirect argument kernel: %s", e.localizedDescription.UTF8String);
+    }
+    g_ind_m = 0;
+    op_hdr h0; memcpy(&h0, op, sizeof h0);
+    if (!ind_add(h0.op, op + 8, h0.size) || !g_ind_m) return;
+    int r = ind_scan(op + h0.size, 0);
+    for (int k = g_ret_n - 1; r == IND_GO && k >= 0; k--) r = ind_scan(g_ret[k], 0);
+    for (int k = 0; r == IND_GO && k < g_nrest; k++) r = ind_scan((const uint8_t *)g_rest[k], 0);
+    id<MTLBuffer> ib; size_t io = arena_alloc((size_t)g_ind_m * sizeof(ind_in), &ib); memcpy((uint8_t *)ib.contents + io, g_ind_in, (size_t)g_ind_m * sizeof(ind_in));
+    id<MTLBuffer> ob; size_t oo = arena_alloc((size_t)g_ind_m * 20, &ob);
+    id<MTLBuffer> nb; size_t no = arena_alloc(16, &nb); *(uint32_t *)((uint8_t *)nb.contents + no) = g_ind_m;
+    rp_end(); if (g_blit) { enc_b_end(g_blit); g_blit = nil; }
+    id<MTL4ComputeCommandEncoder> ce = (id<MTL4ComputeCommandEncoder>)enc_c_begin(NULL); [ce setArgumentTable:at];
+    [at setAddress:ib.gpuAddress + io atIndex:0]; [at setAddress:ob.gpuAddress + oo atIndex:1]; [at setAddress:nb.gpuAddress + no atIndex:2];
+    enc_c_pso(ce, ps); enc_c_dispatch(ce, MTLSizeMake(((NSUInteger)g_ind_m + 63) / 64, 1, 1), MTLSizeMake(64, 1, 1));
+    enc_c_end(ce); args_dirty_all();
+    for (uint32_t i = 0; i < g_ind_m; i++) { uint64_t *s = ind_slot(g_ind_rec[i], 1); if (s) *s = ob.gpuAddress + oo + 20ull * i; }
+    g_ind_batches++; g_ind_draws += g_ind_m;
+    static int once; if (!once++) MLOG("first GPU-resolved indirect batch: %u draws (pass %llu)", g_ind_m, g_stat_pass + 1);
+    if (g_ind_batches % 4096 == 0) MLOG("GPU-resolved indirect draws: %llu batches, %.1f draws per batch, %.1f batches per frame", (unsigned long long)g_ind_batches,
+                                        (double)g_ind_draws / (double)g_ind_batches, (double)g_ind_batches / (double)(atomic_load(&g_cur_frame) + 1));
+}
+static uint64_t g_ind_gpu; static const void *g_ind_cur; static uint64_t g_ind_ibuf;
 // TOTK: color clears in the middle of a render pass, with a partial channel mask or a partial scissor are drawn as a
 // full-target triangle that writes only that attachment's masked channels inside the scissor (depth/stencil untouched).
 static void clear_quad_core(id<MTL4RenderCommandEncoder> en, const uint32_t cfmt[8], uint32_t dfmt, uint32_t sfmt, uint32_t samples,
@@ -10047,7 +10141,8 @@ frz_plain:;
         }
         if (dw->count >= 4) enc_r_draw_indexed(en, mp, (dw->count / 4) * 6, MTLIndexTypeUInt32, g_quad_gpu, g_quad_ib.length, dw->instances > 1 ? dw->instances : 1, dw->first, dw->base_instance);
     } else if (dw) {
-        if (dw->count && (dw->instances > 1 || dw->base_instance)) enc_r_draw_instanced(en, mp, dw->first, dw->count, dw->instances, dw->base_instance);
+        if (g_ind_gpu && g_ind_cur == dw) enc_r_draw_indirect(en, mp, g_ind_gpu);
+        else if (dw->count && (dw->instances > 1 || dw->base_instance)) enc_r_draw_instanced(en, mp, dw->first, dw->count, dw->instances, dw->base_instance);
         else if (dw->count && dw->instances >= 0) enc_r_draw(en, mp, dw->first, dw->count);
     } else {
         if (prim == 7) { RED_ONCE(20, "带索引的四边形未实现"); return; }
@@ -10074,7 +10169,10 @@ frz_plain:;
             return;
         }
         use_rec("buf", di->ibuf, (uint64_t)di->count * (di->itype == 1 ? 2 : 4), 0, NULL);
-        if (di->count) enc_r_draw_indexed(en, mp, di->count, di->itype == 1 ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32, gpu, ((__bridge id<MTLBuffer>)mb).length - mo,
+        if (g_ind_gpu && g_ind_cur == di) {
+            if (!mtl_gpu_addr(g_ind_ibuf, 1, &mb, &mo, &gpu)) { RED_ONCE(61, "indirect draw index buffer not in a memory pool"); return; }
+            enc_r_draw_indexed_indirect(en, mp, di->itype == 1 ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32, gpu, ((__bridge id<MTLBuffer>)mb).length - mo, g_ind_gpu);
+        } else if (di->count) enc_r_draw_indexed(en, mp, di->count, di->itype == 1 ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32, gpu, ((__bridge id<MTLBuffer>)mb).length - mo,
                 di->instances ? di->instances : 1, di->base_vertex, di->base_instance);
     }
     if (g_rt_range_pending) { PD("j rt_level_range pass=%llu vc=%u", g_stat_pass, (unsigned)(dw ? dw->count : di->count)); g_rt_range_pending=0; }
@@ -10170,19 +10268,27 @@ static id<MTL4ComputeCommandEncoder> disp_enc(void) {
     if (g_disp_n % 20000 == 0) MLOG("[nvn] 计算派发 至 %llu 次：其中 %llu 次（%.0f%%）接在已开的计算编码器里，没有另开编码器", (unsigned long long)g_disp_n, (unsigned long long)g_disp_shared, 100.0 * (double)g_disp_shared / (double)g_disp_n);
     return g_blit;
 }
-/* Indirect draw records (p_draw_indirect tail, Bayonetta 3): read {count, instances, first, base vertex, base instance}
+/* Indirect draw records (p_draw_indirect tail): read {count, instances, first, base vertex, base instance}
    (elements) or {count, instances, first, base instance} (arrays) from memory now and write them into the record.
-   Approximation: arguments a GPU pass of this same submission writes are seen as they are in memory at replay, usually the
-   previous frame's. 0 = nothing to draw. */
+   Eligible records use arguments resolved on the GPU timeline; quads, 8-bit indices and the opt-out CPU path keep the
+   replay-time approximation. 0 = nothing to draw. */
 static int draw_resolve(const op_hdr *h, void *rec, int indexed) {
     size_t at = indexed ? DRAW_TAIL_AT(p_draw_idx) : DRAW_TAIL_AT(p_draw);
+    g_ind_gpu = 0; g_ind_cur = NULL;
     if (h->size < 8 + at + sizeof(p_draw_indirect)) return 1;
     p_draw_indirect t; memcpy(&t, (uint8_t *)rec + at, sizeof t);
     if (t.magic != DRAW_INDIRECT_MAGIC) return 1;
-    if (t.count_addr) { uint32_t cnt; if (g_nupd) upd_guard(t.count_addr, t.count_addr + 4); memcpy(&cnt, (const void *)(uintptr_t)t.count_addr, 4); if (t.index >= cnt) return 0; }
+    uint64_t gpu = 0;
+    if (ind_gpu_on() && ind_tail(indexed ? OP_DRAW_IDX : OP_DRAW, rec, h->size)) {
+        uint64_t *s = ind_slot(rec, 0);
+        if (!s || !*s) { ind_resolve((const uint8_t *)rec - 8); s = ind_slot(rec, 0); }
+        if (s && *s) gpu = *s; else RED_ONCE(60, "an indirect draw could not be resolved on the GPU (arguments read on the CPU)");
+    }
+    if (!gpu && t.count_addr) { uint32_t cnt; if (g_nupd) upd_guard(t.count_addr, t.count_addr + 4); memcpy(&cnt, (const void *)(uintptr_t)t.count_addr, 4); if (t.index >= cnt) return 0; }
     if (g_nupd) upd_guard(t.args, t.args + 20);
     uint32_t v[5]; memcpy(v, (const void *)(uintptr_t)t.args, indexed ? 20 : 16);
-    if (!v[0] || !v[1]) return 0;
+    if (gpu) { if (!v[0]) v[0] = 3; if (!v[1]) v[1] = 1; g_ind_gpu = gpu; g_ind_cur = rec; g_ind_ibuf = t.ibuf; }
+    else if (!v[0] || !v[1]) return 0;
     if (indexed) {
         p_draw_idx *d = rec; unsigned isz = d->itype == NVN_INDEX_TYPE_UNSIGNED_BYTE ? 1 : d->itype == NVN_INDEX_TYPE_UNSIGNED_SHORT ? 2 : 4;
         d->count = (int32_t)v[0]; d->instances = (int32_t)v[1]; d->ibuf = t.ibuf + (uint64_t)v[2] * isz; d->base_vertex = (int32_t)v[3]; d->base_instance = (int32_t)v[4];
@@ -10977,8 +11083,8 @@ void mtl_exec(const uint8_t *p) {
                 if (c->stencil_mask) { R.clear_s = 1; R.cs = (uint32_t)c->stencil; }
                 break;
             }
-            case OP_DRAW: if (!draw_resolve(&h, (void *)a, 0)) break; g_exec_next = p + h.size; draw(a, NULL); g_exec_next = NULL; break;   // 前瞻起点 | Lookahead start point
-            case OP_DRAW_IDX: if (!draw_resolve(&h, (void *)a, 1)) break; g_exec_next = p + h.size; draw(NULL, a); g_exec_next = NULL; break;
+            case OP_DRAW: if (!draw_resolve(&h, (void *)a, 0)) break; g_exec_next = p + h.size; draw(a, NULL); g_exec_next = NULL; g_ind_gpu = 0; g_ind_cur = NULL; break;   // 前瞻起点 | Lookahead start point
+            case OP_DRAW_IDX: if (!draw_resolve(&h, (void *)a, 1)) break; g_exec_next = p + h.size; draw(NULL, a); g_exec_next = NULL; g_ind_gpu = 0; g_ind_cur = NULL; break;
             // 状态没变就不置脏（游戏每次绘制前常重发同值的程序 / 状态块 / 顶点格式；脏标志只决定是否重取管线 / 深度模板对象，值相同则对象相同）
             // Do not mark dirty if the state did not change (the game often re-sends the same program / state block / vertex format before each draw; the dirty flag only decides whether to re-fetch the pipeline / depth-stencil object, and equal values mean the same object)
             case OP_SCISSOR: case OP_BIND_PROGRAM: case OP_BIND_STATE: case OP_BIND_VATTR: case OP_BIND_VSTREAM: case OP_BIND_VBUF:
